@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field, model_validator
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, date
 
 
 # Validação das regras do banco da dados
@@ -58,3 +58,18 @@ class TradeInferenciaSchema(BaseModel):
     # Outros campos do seu trade (ativo, quantidade, etc) permanecem aqui
     setup_nome: str
     emocional_nome: str
+
+class CheckinBase(BaseModel):
+    data: date
+    checkin: datetime
+    checkout: Optional[datetime] = None
+    status: str = Field(default="Presente", min_length=1, max_length=32)
+    observacao: Optional[str] = ""
+
+class CheckinCreate(CheckinBase):
+    pass
+
+class CheckinUpdate(BaseModel):
+    checkout: Optional[datetime] = None
+    status: Optional[str] = None
+    observacao: Optional[str] = None

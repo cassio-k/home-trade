@@ -12,6 +12,7 @@ if str(pasta_api) not in sys.path:
     sys.path.insert(0, str(pasta_api))
 
 from database import supabase
+from schemas import CheckinCreate, CheckinUpdate
 
 app = FastAPI(title="TradeHome API", version="1.0.0")
 
@@ -75,6 +76,23 @@ def _montar_payload_trade(trade: Dict[str, Any]) -> Dict[str, Any]:
         "emocional_id": emocional_id,
         "is_legado": bool(trade.get("is_legado", False)),
     }
+
+
+def _montar_payload_checkin(checkin: CheckinCreate) -> Dict[str, Any]:
+    payload = {
+        "data": checkin.data.isoformat(),
+        "checkin": checkin.checkin.isoformat(),
+        "status": checkin.status,
+        "observacao": checkin.observacao or "",
+    }
+    if checkin.checkout is not None:
+        payload["checkout"] = checkin.checkout.isoformat()
+    return payload
+
+
+def _obter_intervalo_mes_dia(ano: int, mes_nome: str) -> Tuple[str, str]:
+    inicio, fim = _obter_intervalo_mes(ano, mes_nome)
+    return inicio.split("T")[0], fim.split("T")[0]
 
 
 def _sincronizar_anexos_trade(trade_id: int, url_imagem: Optional[str]) -> None:
@@ -211,6 +229,76 @@ def upload_grafico(file: UploadFile = File(...)):
 def deletar_trade_diario(trade_id: int):
     supabase.table("anexos_trades").delete().eq("trade_id", trade_id).execute()
     supabase.table("trades").delete().eq("id", trade_id).execute()
+    return {"status": "deletado"}
+
+####################
+# ENDPOINTS CHECKIN #
+####################
+
+@app.get("/api/checkins/{checkin_id}")
+def obter_checkin_por_id(checkin_id: int):
+    try:
+        resposta = supabase.table("checkins").select("*").eq("id", checkin_id).single().execute()
+        checkin = resposta.data
+        if not checkin:
+            raise HTTPException(status_code=404, detail="Check-in não encontrado")
+        return checkin
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.get("/api/checkins")
+def listar_checkins(ano: int = Query(...), mes_nome: str = Query(...)):
+    try:
+        data_inicio, data_fim = _obter_intervalo_mes_dia(ano, mes_nome)
+        resposta = (
+            supabase.table("checkins")
+            .select("*")
+            .gte("data", data_inicio)
+            .lte("data", data_fim)
+            .order("data", desc=False)
+            .execute()
+        )
+        return resposta.data or []
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Erro interno no banco: {str(exc)}") from exc
+
+
+@app.post("/api/checkins")
+def cadastrar_checkin(checkin: CheckinCreate = Body(...)):
+    try:
+        payload = _montar_payload_checkin(checkin)
+        response = supabase.table("checkins").insert(payload).execute()
+        return response.data[0] if response.data else {}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.put("/api/checkins/{checkin_id}")
+def atualizar_checkin(checkin_id: int, checkin: CheckinUpdate = Body(...)):
+    try:
+        update_payload: Dict[str, Any] = {}
+        if checkin.checkout is not None:
+            update_payload["checkout"] = checkin.checkout.isoformat()
+        if checkin.status is not None:
+            update_payload["status"] = checkin.status
+        if checkin.observacao is not None:
+            update_payload["observacao"] = checkin.observacao
+
+        if not update_payload:
+            raise HTTPException(status_code=400, detail="Nenhum campo válido informado para atualização")
+
+        supabase.table("checkins").update(update_payload).eq("id", checkin_id).execute()
+        return {"status": "atualizado"}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.delete("/api/checkins/{checkin_id}")
+def deletar_checkin(checkin_id: int):
+    supabase.table("checkins").delete().eq("id", checkin_id).execute()
     return {"status": "deletado"}
 
 #######################
