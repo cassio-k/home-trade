@@ -235,6 +235,7 @@ def deletar_trade_diario(trade_id: int):
 # ENDPOINTS CHECKIN #
 ####################
 
+supabase.table
 @app.get("/api/checkins/{checkin_id}")
 def obter_checkin_por_id(checkin_id: int):
     try:

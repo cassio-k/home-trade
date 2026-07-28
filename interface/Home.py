@@ -1,41 +1,16 @@
+import sys
+from pathlib import Path
+
 import streamlit as st
 import pandas as pd
 from datetime import datetime
 from streamlit_calendar import calendar
-from home_service import buscar_dashboard, obter_checkins_mes, registrar_checkin, registrar_checkout
 
+pasta_interface = Path(__file__).resolve().parent
+if str(pasta_interface) not in sys.path:
+    sys.path.insert(0, str(pasta_interface))
 
-def obter_mes_nome(mes_num: int) -> str:
-    meses = [
-        "Janeiro",
-        "Fevereiro",
-        "Março",
-        "Abril",
-        "Maio",
-        "Junho",
-        "Julho",
-        "Agosto",
-        "Setembro",
-        "Outubro",
-        "Novembro",
-        "Dezembro",
-    ]
-    return meses[mes_num - 1]
-
-
-def carregar_checkin_hoje():
-    hoje = datetime.now().date()
-    mes_nome = obter_mes_nome(hoje.month)
-    ok, resultado = obter_checkins_mes(hoje.year, mes_nome)
-    if not ok:
-        return None, resultado
-
-    checkins = resultado if isinstance(resultado, list) else []
-    hoje_str = hoje.isoformat()
-    for item in checkins:
-        if item.get("data") == hoje_str:
-            return item, None
-    return None, None
+from home_service import buscar_dashboard, carregar_checkin_hoje, registrar_checkin, registrar_checkout
 
 
 # --- BARRA LATERAL: FILTROS MACRO ---
@@ -52,6 +27,76 @@ if ativo_selecionado: params["ativo"] = ativo_selecionado
 if setup_selecionado: params["setup_id"] = setup_selecionado
 
 
+def rerun_if_possible():
+    if hasattr(st, "rerun"):
+        st.rerun()
+    elif hasattr(st, "experimental_rerun"):
+        st.experimental_rerun()
+    else:
+        st.stop()
+
+
+@st.dialog("📋 Check-in Pré-Market")
+def modal_checkin():
+    st.write("Registre seu estado pré-sessão:")
+    data_checkin = st.date_input("Data", value=datetime.now().date())
+    hora_checkin = st.time_input("Horário do Check-in", value=datetime.now().time())
+    status = st.selectbox("Status do dia", ["Presente", "Folga", "Ausente"], index=0)
+    observacao = st.text_area("Observação", placeholder="Digite sua observação...", height=120)
+
+    if st.button("Gravar Check-in", use_container_width=True, type="primary"):
+        ok, erro = registrar_checkin(
+            data=data_checkin.isoformat(),
+            checkin=datetime.combine(data_checkin, hora_checkin).isoformat(),
+            status=status,
+            observacao=observacao,
+        )
+        if ok:
+            st.toast("Check-in realizado com sucesso!", icon="✅")
+            rerun_if_possible()
+        else:
+            st.error(erro)
+
+
+checkin_hoje, erro_checkin = carregar_checkin_hoje()
+if erro_checkin:
+    st.sidebar.warning(f"Não foi possível carregar o check-in de hoje: {erro_checkin}")
+
+if st.sidebar.button("📌 Check-in", use_container_width=True):
+    modal_checkin()
+
+
+if checkin_hoje is None:
+    st.sidebar.info("Nenhum check-in registrado para hoje.")
+elif checkin_hoje.get("checkout") is None:
+    st.sidebar.success("Check-in ativo")
+    st.sidebar.write(f"**Entrada:** {checkin_hoje.get('checkin')}")
+    st.sidebar.write(f"**Status:** {checkin_hoje.get('status')}")
+    if checkin_hoje.get('observacao'):
+        st.sidebar.write(f"**Observação:** {checkin_hoje.get('observacao')}")
+    if st.sidebar.button("⏹️ Fazer Check-out", use_container_width=True, key="btn_sidebar_checkout"):
+        ok, erro = registrar_checkout(
+            int(checkin_hoje["id"]),
+            datetime.now().isoformat(),
+            status=checkin_hoje.get("status", "Presente"),
+        )
+        if ok:
+            st.sidebar.success("Check-out registrado com sucesso.")
+            rerun_if_possible()
+        else:
+            st.sidebar.error(erro)
+else:
+    st.sidebar.success("Check-in concluído")
+    st.sidebar.write(f"**Entrada:** {checkin_hoje.get('checkin')}")
+    st.sidebar.write(f"**Saída:** {checkin_hoje.get('checkout')}")
+    st.sidebar.write(f"**Status:** {checkin_hoje.get('status')}")
+    if checkin_hoje.get('observacao'):
+        st.sidebar.write(f"**Observação:** {checkin_hoje.get('observacao')}")
+
+
+st.divider()
+
+
 # --- REQUISIÇÃO ÚNICA PARA O BACKEND (FastAPI) ---
 ok, resposta_api = buscar_dashboard(
     mes=params.get("mes"), ativo=params.get("ativo"), setup_id=params.get("setup_id")
@@ -66,98 +111,9 @@ historico = resposta_api["historico"]
 graficos = resposta_api["graficos"]
 
 # --- RENDERIZAÇÃO DA INTERFACE ---
+
 st.title("📈 Visão Geral da Performance")
 st.caption("Dados analíticos consolidados em tempo real através da API.")
-
-if "mostrar_form_checkin" not in st.session_state:
-    st.session_state.mostrar_form_checkin = False
-
-st.divider()
-
-hoje = datetime.now().date()
-checkin_hoje, erro_checkin = carregar_checkin_hoje()
-
-if checkin_hoje is None and st.session_state.mostrar_form_checkin:
-    coluna_esquerda, coluna_meio, coluna_direita = st.columns([1, 2, 1])
-    with coluna_meio:
-        with st.form("form_checkin"):
-            st.markdown("### Registrar Check-in")
-            data_checkin = st.date_input("Data", value=hoje)
-            hora_checkin = st.time_input("Horário do Check-in", value=datetime.now().time())
-            status_checkin = st.selectbox("Status do dia", ["Presente", "Folga", "Ausente"], index=0)
-            observacao_checkin = st.text_area("Observação", value=st.session_state.get("observacao_dia", ""), height=120)
-
-            col_submit, col_cancel = st.columns([2, 1])
-            with col_submit:
-                enviar = st.form_submit_button("Salvar Check-in")
-            with col_cancel:
-                cancelar = st.form_submit_button("Cancelar")
-
-            if enviar:
-                ok, erro = registrar_checkin(
-                    data_checkin.isoformat(),
-                    datetime.combine(data_checkin, hora_checkin).isoformat(),
-                    status=status_checkin,
-                    observacao=observacao_checkin,
-                )
-                if ok:
-                    st.success("Check-in registrado com sucesso.")
-                    st.session_state.mostrar_form_checkin = False
-                    st.experimental_rerun()
-                else:
-                    st.error(erro)
-            if cancelar:
-                st.session_state.mostrar_form_checkin = False
-                st.experimental_rerun()
-
-elif checkin_hoje is None:
-    col_status, col_botao, col_info = st.columns([2, 2, 4])
-    with col_status:
-        st.write("### Check-in diário")
-        st.write("Nenhum check-in registrado para hoje.")
-    with col_botao:
-        if st.button("✅ Fazer Check-in", key="btn_open_checkin"):
-            st.session_state.mostrar_form_checkin = True
-            st.experimental_rerun()
-    with col_info:
-        if erro_checkin:
-            st.warning(f"Não foi possível carregar os check-ins: {erro_checkin}")
-        else:
-            st.info("Clique em 'Fazer Check-in' para registrar o início do seu dia.")
-
-elif checkin_hoje.get("checkout") is None:
-    col_status, col_botao, col_info = st.columns([2, 2, 4])
-    with col_status:
-        st.write("### Check-in de hoje")
-        st.write(f"Entrada: {checkin_hoje.get('checkin')}")
-        st.write(f"Status atual: {checkin_hoje.get('status')}")
-    with col_botao:
-        if st.button("⏹️ Fazer Check-out", key="btn_checkout"):
-            ok, erro = registrar_checkout(
-                int(checkin_hoje["id"]),
-                datetime.now().isoformat(),
-                status=checkin_hoje.get("status", "Presente"),
-            )
-            if ok:
-                st.success("Check-out registrado com sucesso.")
-                st.experimental_rerun()
-            else:
-                st.error(erro)
-    with col_info:
-        if erro_checkin:
-            st.warning(f"Não foi possível carregar os check-ins: {erro_checkin}")
-        else:
-            st.info("Você já fez o check-in. Use o botão para registrar o check-out quando terminar.")
-
-else:
-    col_status, col_info = st.columns([2, 6])
-    with col_status:
-        st.success("Check-in e check-out registrados para hoje.")
-        st.write(f"Entrada: {checkin_hoje.get('checkin')}")
-        st.write(f"Saída: {checkin_hoje.get('checkout')}")
-    with col_info:
-        if checkin_hoje.get('observacao'):
-            st.write(f"Observação: {checkin_hoje.get('observacao')}")
 
 st.divider()
 
