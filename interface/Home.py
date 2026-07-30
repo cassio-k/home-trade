@@ -1,6 +1,7 @@
 import sys
 from pathlib import Path
 
+from fastapi import background
 import streamlit as st
 import pandas as pd
 from datetime import datetime
@@ -10,7 +11,7 @@ pasta_interface = Path(__file__).resolve().parent
 if str(pasta_interface) not in sys.path:
     sys.path.insert(0, str(pasta_interface))
 
-from home_service import buscar_dashboard, carregar_checkin_hoje, registrar_checkin, registrar_checkout
+from home_service import buscar_dashboard, obter_checkins_mes, carregar_checkin_hoje, registrar_checkin, registrar_checkout, obter_mes_nome
 
 
 # --- BARRA LATERAL: FILTROS MACRO ---
@@ -131,7 +132,6 @@ with col3:
 st.divider()
 if not historico:
     st.info("Nenhuma operação encontrada para os filtros selecionados nesta combinação.")
-    st.stop()
 
 # Transforma o histórico em DataFrame apenas para alimentar os componentes visuais
 df_trades = pd.DataFrame(historico)
@@ -159,6 +159,20 @@ with col_dir:
 
 st.divider()
 
+
+ano_consulta = datetime.now().year
+mes_consulta = None
+
+if mes_selecionado:
+    ano_consulta = int(mes_selecionado.split("-")[0])
+    mes_num = int(mes_selecionado.split("-")[1])
+    mes_consulta = obter_mes_nome(mes_num)
+else:
+    mes_consulta = obter_mes_nome(datetime.now().month)
+
+ok_checkins, dados_checkins = obter_checkins_mes(ano_consulta, mes_consulta)
+lista_checkins = dados_checkins if (ok_checkins and isinstance(dados_checkins, list)) else []
+
 # 4. O CALENDÁRIO 
 st.subheader("Calendário de Operações")
 eventos = []
@@ -179,6 +193,26 @@ for _, row in df_trades.iterrows():
         "borderColor": cor_evento,
     })
 
+for c in lista_checkins:
+    cor_check = "#0096FA" if 'Presente' in str(c.get("status")) else ("#FDFDFD" if c.get("status") == "Ausente" else "#7f8c8d")
+
+    try:
+        data_raw = c.get("data")
+        if not data_raw:
+            continue
+
+        data_checkin = pd.to_datetime(data_raw).strftime("%Y-%m-%d")
+        status = str(c.get("status") or "Check-in")
+
+        eventos.append({
+            "start": data_checkin,
+            "display": "background",
+            "color": cor_check,
+        })
+    except Exception as e:
+        st.write(f"Erro ao formatar item do checkin: {e}")
+
+# 4. Renderização
 calendar_options = {
     "editable": True,
     "selectable": True,
