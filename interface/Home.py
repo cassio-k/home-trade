@@ -1,7 +1,6 @@
 import sys
 from pathlib import Path
-
-from fastapi import background
+import home_service
 import streamlit as st
 import pandas as pd
 from datetime import datetime
@@ -11,10 +10,9 @@ pasta_interface = Path(__file__).resolve().parent
 if str(pasta_interface) not in sys.path:
     sys.path.insert(0, str(pasta_interface))
 
-from home_service import buscar_dashboard, obter_checkins_mes, carregar_checkin_hoje, registrar_checkin, registrar_checkout, obter_mes_nome
 
+### FILTROS MACRO ###
 
-# --- BARRA LATERAL: FILTROS MACRO ---
 with st.sidebar:
     st.header("Filtros Globais")
     
@@ -28,13 +26,7 @@ if ativo_selecionado: params["ativo"] = ativo_selecionado
 if setup_selecionado: params["setup_id"] = setup_selecionado
 
 
-def rerun_if_possible():
-    if hasattr(st, "rerun"):
-        st.rerun()
-    elif hasattr(st, "experimental_rerun"):
-        st.experimental_rerun()
-    else:
-        st.stop()
+### CHECKIN ###
 
 
 @st.dialog("📋 Check-in Pré-Market")
@@ -46,7 +38,7 @@ def modal_checkin():
     observacao = st.text_area("Observação", placeholder="Digite sua observação...", height=120)
 
     if st.button("Gravar Check-in", use_container_width=True, type="primary"):
-        ok, erro = registrar_checkin(
+        ok, erro = home_service.registrar_checkin(
             data=data_checkin.isoformat(),
             checkin=datetime.combine(data_checkin, hora_checkin).isoformat(),
             status=status,
@@ -54,12 +46,12 @@ def modal_checkin():
         )
         if ok:
             st.toast("Check-in realizado com sucesso!", icon="✅")
-            rerun_if_possible()
+            st.rerun()
         else:
             st.error(erro)
 
 
-checkin_hoje, erro_checkin = carregar_checkin_hoje()
+checkin_hoje, erro_checkin = home_service.carregar_checkin_hoje()
 if erro_checkin:
     st.sidebar.warning(f"Não foi possível carregar o check-in de hoje: {erro_checkin}")
 
@@ -76,14 +68,14 @@ elif checkin_hoje.get("checkout") is None:
     if checkin_hoje.get('observacao'):
         st.sidebar.write(f"**Observação:** {checkin_hoje.get('observacao')}")
     if st.sidebar.button("⏹️ Fazer Check-out", use_container_width=True, key="btn_sidebar_checkout"):
-        ok, erro = registrar_checkout(
+        ok, erro = home_service.registrar_checkout(
             int(checkin_hoje["id"]),
             datetime.now().isoformat(),
             status=checkin_hoje.get("status", "Presente"),
         )
         if ok:
             st.sidebar.success("Check-out registrado com sucesso.")
-            rerun_if_possible()
+            st.rerun()
         else:
             st.sidebar.error(erro)
 else:
@@ -94,28 +86,24 @@ else:
     if checkin_hoje.get('observacao'):
         st.sidebar.write(f"**Observação:** {checkin_hoje.get('observacao')}")
 
-
 st.divider()
 
 
-# --- REQUISIÇÃO ÚNICA PARA O BACKEND (FastAPI) ---
-ok, resposta_api = buscar_dashboard(
-    mes=params.get("mes"), ativo=params.get("ativo"), setup_id=params.get("setup_id")
-)
+# REQUISIÇÃO PARA MONTAR O DASHBOARDS DA PAGINA
+ok, resposta_api = home_service.buscar_dashboard(
+    mes=params.get("mes"), ativo=params.get("ativo"), setup_id=params.get("setup_id"))
 if not ok:
     st.error(resposta_api)
     st.stop()
-
 # Desempacotamento do payload limpo enviado pelo servidor
 metricas = resposta_api["metricas"]
 historico = resposta_api["historico"]
 graficos = resposta_api["graficos"]
 
-# --- RENDERIZAÇÃO DA INTERFACE ---
+### RENDERIZAÇÃO DA INTERFACE ###
 
 st.title("📈 Visão Geral da Performance")
 st.caption("Dados analíticos consolidados em tempo real através da API.")
-
 st.divider()
 
 # 1. BLOCO DE MÉTRICAS VITAIS
@@ -133,10 +121,14 @@ st.divider()
 if not historico:
     st.info("Nenhuma operação encontrada para os filtros selecionados nesta combinação.")
 
-# Transforma o histórico em DataFrame apenas para alimentar os componentes visuais
 df_trades = pd.DataFrame(historico)
 
-# 2. CURVA DE CAPITAL (EQUITY CURVE)
+# 2. TABELA DE DADOS BRUTOS
+st.subheader("Listagem Detalhada")
+colunas_exibicao = ["data_trade", "ativo", "ordem", "setup_id", "emocional_id", "resultado"]
+st.dataframe(df_trades[colunas_exibicao], use_container_width=True)
+
+# 3. CURVA DE CAPITAL (EQUITY CURVE)
 st.subheader("Análise de Performance")
 st.caption("Evolução do capital acumulado trade a trade")
 if graficos["curva_capital"]:
@@ -146,7 +138,7 @@ if graficos["curva_capital"]:
 
 st.divider()
 
-# 3. GRÁFICOS DE PERFORMANCE COMPARATIVOS (LADO A LADO)
+# 4. GRÁFICOS DE PERFORMANCE COMPARATIVOS (LADO A LADO)
 col_esq, col_dir = st.columns(2)
 with col_esq:
     st.subheader("Performance por Setup")
@@ -159,6 +151,7 @@ with col_dir:
 
 st.divider()
 
+# 5. O CALENDÁRIO 
 
 ano_consulta = datetime.now().year
 mes_consulta = None
@@ -166,14 +159,14 @@ mes_consulta = None
 if mes_selecionado:
     ano_consulta = int(mes_selecionado.split("-")[0])
     mes_num = int(mes_selecionado.split("-")[1])
-    mes_consulta = obter_mes_nome(mes_num)
+    mes_consulta = home_service.obter_mes_nome(mes_num)
 else:
-    mes_consulta = obter_mes_nome(datetime.now().month)
+    mes_consulta = home_service.obter_mes_nome(datetime.now().month)
 
-ok_checkins, dados_checkins = obter_checkins_mes(ano_consulta, mes_consulta)
+ok_checkins, dados_checkins = home_service.obter_checkins_mes(ano_consulta, mes_consulta)
 lista_checkins = dados_checkins if (ok_checkins and isinstance(dados_checkins, list)) else []
 
-# 4. O CALENDÁRIO 
+
 st.subheader("Calendário de Operações")
 eventos = []
 
@@ -212,7 +205,7 @@ for c in lista_checkins:
     except Exception as e:
         st.write(f"Erro ao formatar item do checkin: {e}")
 
-# 4. Renderização
+# Renderização
 calendar_options = {
     "editable": True,
     "selectable": True,
@@ -224,11 +217,68 @@ calendar_options = {
     "initialView": "dayGridMonth",
 }
 
-calendar(events=eventos, options=calendar_options)
 
-st.divider()
+# 6. PROCESSAMENTO DO CLIQUE NO CALENDÁRIO
+cal_state = calendar(events=eventos, options=calendar_options)
 
-# 5. TABELA DE DADOS BRUTOS (FIM DA PÁGINA)
-st.subheader("Listagem Detalhada")
-colunas_exibicao = ["data_trade", "ativo", "ordem", "setup_id", "emocional_id", "resultado"]
-st.dataframe(df_trades[colunas_exibicao], use_container_width=True)
+data_clicada = None
+try:
+    if hasattr(home_service, "processar_clique_calendario"):
+        data_clicada = home_service.processar_clique_calendario(cal_state)
+    else:
+        import importlib
+        importlib.reload(home_service)
+        fn = getattr(home_service, "processar_clique_calendario", None)
+        if callable(fn):
+            data_clicada = fn(cal_state)
+        else:
+            st.warning("Função 'processar_clique_calendario' não encontrada em home_service.")
+except Exception as e:
+    st.write(f"Erro ao processar clique no calendário: {e}")
+    data_clicada = None
+
+# atualiza a memória de sessão do Streamlit
+if data_clicada and data_clicada != st.session_state.get("data_selecionada"):
+    st.session_state["data_selecionada"] = data_clicada
+    st.rerun()
+
+
+# 7. RENDERIZAÇÃO DO RESUMO NA SIDEBAR
+with st.sidebar:
+    st.markdown("---")
+    data_alvo = st.session_state.get("data_selecionada")
+
+    # Transforma o DataFrame do Pandas em uma lista nativa de dicionários
+    trades_nativos = df_trades.to_dict("records") if not df_trades.empty else []
+
+    # O serviço recebe apenas primitivos do Python
+    resumo = home_service.obter_resumo_diario(data_alvo, lista_checkins, trades_nativos)
+
+    if not resumo:
+        st.info("👈 Clique em um dia no calendário para ver o resumo.")
+    else:
+        st.subheader(f"📅 Resumo de {resumo['data']}")
+
+        # Renderização do Check-in
+        if resumo["checkin"]:
+            st.success(f"**Check-in:** {resumo['checkin']['status']}")
+            if resumo["checkin"]["observacao"]:
+                st.caption(f"**Obs:** {resumo['checkin']['observacao']}")
+        else:
+            st.warning("Nenhum check-in neste dia.")
+
+        # Renderização dos Trades
+        if resumo["trades"]:
+            t_info = resumo["trades"]
+            pnl = t_info["pnl"]
+            
+            st.markdown(f"**Trades Realizados:** {t_info['total_operacoes']}")
+            
+            cor_pnl = "green" if pnl > 0 else ("red" if pnl < 0 else "gray")
+            st.markdown(f"**Resultado:** :{cor_pnl}[R$ {pnl:.2f}]")
+
+            with st.expander("Ver ativos operados"):
+                for op in t_info["operacoes"]:
+                    st.text(f"{op.get('ordem')} {op.get('ativo')} | PnL: R$ {op.get('resultado')}")
+        else:
+            st.caption("Nenhum trade realizado neste dia.")
